@@ -47,17 +47,7 @@ get_spatial_layer <- function(url,
                               sf_type = NULL,
                               head = FALSE,
                               ...) {
-  layer_info <- jsonlite::fromJSON(
-    httr::content(
-      httr::POST(
-        url,
-        query=list(f="json", token=token),
-        encode="form",
-        config = httr::config(ssl_verifypeer = FALSE)
-      ),
-      as="text"
-    )
-  )
+  layer_info <- get_layer_info(url, token)
   if (layer_info$type == "Group Layer") {
     stop("You are trying to access a group layer. Please select one of the ",
          "sub-layers instead.")
@@ -72,11 +62,89 @@ get_spatial_layer <- function(url,
     sf_type <- layer_info$geometryType
   }
   query_url <- paste(url, "query", sep="/")
-  esri_features <- get_esri_features(
-    query_url, out_fields, where, token, head, ...
-  )
+  args <- list(query_url, out_fields, where, token, head, ...)
+  if(!"idsplits" %in% names(args))
+    args <- c(args, list(idsplits = layer_info$maxRecordCount))
+  esri_features <- do.call(get_esri_features, args)
   simple_features <- esri2sfGeom(esri_features, sf_type)
   return(simple_features)
+}
+
+#' Retrieve a table from an ArcGIS REST API
+#'
+#' This function retrieves tables present in an ArcGIS REST services API and
+#' returns them as a data frame.
+#'
+#' This function retrieves tables from an ArcGIS REST API designated by the
+#' URL. Additional querying features can be passed such as a SQL WHERE
+#' statement (\code{where} argument) as well as any other types of queries
+#' that the ArcGIS REST API accepts (using \code{...}).
+#'
+#' All of the querying parameters are sent via a POST request to the URL, so
+#' if there are issues with passing additional parameters via \code{...}
+#' first determine how they fit into the POST request and make adjustments as
+#' needed. This syntax can be tricky if you're not used to it.
+#'
+#' @param url A character string of the url for the layer to pull
+#' @param out_fields A character string of the fields to pull for each layer
+#' @param where A character string of the where condition. Default is 1=1
+#' @param token A character string of the token (if needed)
+#' @param head Logical or numeric. Limits the number of records returned from a
+#' query. If TRUE, only the first 5 records will be returned. If numeric, then
+#' the number of records specified in \code{head} will be returned
+#' @param ... Additional arguments to pass to the ArcGIS REST POST request (or
+#' associated internal functions used to query them)
+#'
+#' @return A data frame of the appropriate layer
+#' @export
+get_table_layer <- function(url,
+                            out_fields = "*",
+                            where = "1=1",
+                            token = "",
+                            head = FALSE,
+                            ...) {
+  query_url <- paste(url, "query", sep = "/")
+  layer_info <- get_layer_info(url, token)
+  args <- list(query_url, out_fields, where, token, head, ...)
+  if(!"idsplits" %in% names(args))
+    args <- c(args, list(idsplits = layer_info$maxRecordCount))
+  esri_features <- do.call(get_esri_features, args)
+  atts <-
+    lapply(esri_features, "[[", 1) %>%
+    lapply(
+      function(att)
+        lapply(att, function(x) ifelse(is.null(x), NA, x))
+    )
+  dplyr::bind_rows(lapply(atts, as.data.frame.list, stringsAsFactors = FALSE))
+}
+
+#' Retrieve metadata for a layer
+#'
+#' This function retrieves metadata for a layer.
+#'
+#' @param url A character string of the url for the layer to pull
+#' @param token A character string of the token (if needed)
+#'
+#' @return A list of metadata fields
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' # lava flows on Reykjanes (pr. 'rake-yah-ness') peninsula in Iceland
+#' lava_flows_info <- get_layer_info(reykjanes_lava_flow_url)
+#' }
+get_layer_info <- function(url, token = "") {
+  jsonlite::fromJSON(
+    httr::content(
+      httr::POST(
+        url,
+        query=list(f="json", token=token),
+        encode="form",
+        config = httr::config(ssl_verifypeer = FALSE)
+      ),
+      as="text"
+    )
+  )
 }
 
 get_esri_features <- function(query_url, fields, where, token='', head, ...) {
@@ -267,6 +335,7 @@ esri2sfPolyline <- function(features) {
 get_map_layer <- function(url,
                           sf_object = NULL,
                           bbox = NULL,
+                          bbox_crs = NULL,
                           token = "",
                           clip_raster = TRUE,
                           format = "png",
@@ -277,6 +346,7 @@ get_map_layer <- function(url,
     url = url,
     sf_object = sf_object,
     bbox = bbox,
+    bbox_crs = bbox_crs,
     token = token,
     clip_raster = clip_raster,
     format = format,
@@ -319,6 +389,7 @@ get_map_layer <- function(url,
 get_image_layer <- function(url,
                             sf_object = NULL,
                             bbox = NULL,
+                            bbox_crs = NULL,
                             token = "",
                             clip_raster = TRUE,
                             format = "tiff",
@@ -328,6 +399,7 @@ get_image_layer <- function(url,
     url = url,
     sf_object = sf_object,
     bbox = bbox,
+    bbox_crs = bbox_crs,
     token = token,
     clip_raster = clip_raster,
     format = format,
@@ -348,7 +420,8 @@ get_image_layer <- function(url,
 #'
 #' @param url A character string of the url for the layer to pull
 #' @param sf_object An \code{sf} object used for the bounding box
-#' @param bbox Character string of the bounding box
+#' @param bbox Vector of bounding box coordinates
+#' @param bbox_crs CRS for bbox (required if bbox is used)
 #' @param token A character string of the token (if needed)
 #' @param clip_raster Logical. Should the raster be clipped to contain only
 #' the pixels that reside in the \code{sf_object}? By default, ArcGIS returns
@@ -369,6 +442,7 @@ get_image_layer <- function(url,
 get_raster_layer <- function(url,
                              sf_object = NULL,
                              bbox = NULL,
+                             bbox_crs = NULL,
                              token = "",
                              clip_raster = TRUE,
                              format = "png",
@@ -389,6 +463,13 @@ get_raster_layer <- function(url,
     bbox <- sf::st_bbox(sf_object)
     bbox_coords <- paste(bbox, collapse = ", ")
     bbox_sr <- get_sf_crs(sf_object)
+  } else {
+    if (is.null(bbox_crs)) {
+      stop("You must specify bbox_crs if you are using the bbox argument")
+    } else {
+      bbox_sr <- bbox_crs
+    }
+    bbox_coords <- paste(bbox, collapse = ", ")
   }
   if (export_type == "map") {
     export_url <- paste(url, "export", sep = "/")
@@ -426,13 +507,15 @@ get_raster_layer <- function(url,
   raster_crs <- raster::crs(sf_object)
 
   # set the extent and projection of the raster layer
+  temp_file <- tempfile()
+  utils::download.file(raster_url, temp_file, quiet = TRUE)
   if (export_type == "map") {
-    out <- raster::raster(raster_url)
+    out <- raster::raster(temp_file)
     if (raster::nbands(out) > 1) {
-      out <- raster::stack(raster_url)
+      out <- raster::stack(temp_file)
     }
   } else if (export_type == "image") {
-    out <- raster::stack(raster_url)
+    out <- raster::stack(temp_file)
   }
   raster::extent(out) <- raster_extent
   raster::projection(out) <- raster_crs

@@ -5,4 +5,6 @@ inst/doc
 icons/logo.png
 *.pptx
 *.RData
+.Rhistory
+todo
 
